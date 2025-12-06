@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>通用 Streamable HTTP 演示</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { padding: 30px; font-family: "Microsoft Yahei", Arial; max-width: 800px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; font-size: 24px; }
+        .btn-group { margin-bottom: 20px; }
+        button { 
+            padding: 8px 16px; margin-right: 10px; 
+            border: none; border-radius: 4px; cursor: pointer;
+            background: #409eff; color: white;
+        }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #log-container { 
+            border: 1px solid #e6e6e6; border-radius: 4px;
+            padding: 15px; height: 400px; overflow-y: auto;
+            background: #fafafa; font-size: 14px;
+        }
+        .log-item { margin: 5px 0; line-height: 1.5; }
+        .log-time { color: #999; }
+        .log-data { color: #333; }
+        .log-end { color: #67c23a; font-weight: bold; }
+        .log-error { color: #f56c6c; }
+    </style>
+</head>
+<body>
+    <h1>通用 Streamable HTTP 演示（非 SSE）</h1>
+    <div class="btn-group">
+        <button id="startBtn" onclick="startStream()">开始接收流式数据</button>
+        <button id="stopBtn" onclick="stopStream()" disabled>停止接收</button>
+    </div>
+    <div id="log-container"></div>
+
+    <script>
+        let streamReader = null; // 流式读取器
+        let isStreaming = false; // 流状态标记
+        const logContainer = document.getElementById('log-container');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+
+        // 格式化日志输出
+        function log(text, type = 'data') {
+            const time = new Date().toLocaleTimeString();
+            const className = `log-item log-${type}`;
+            const html = `<div class="${className}"><span class="log-time">[${time}]</span> <span class="log-data">${text}</span></div>`;
+            logContainer.innerHTML += html;
+            // 自动滚动到底部
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        // 启动通用流式接收
+        async function startStream() {
+            if (isStreaming) return;
+
+            // 更新按钮状态
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            isStreaming = true;
+            log('开始建立通用流式连接...', 'data');
+
+            try {
+                // 发起 HTTP 请求（默认就是分块接收）
+                const response = await fetch('http://localhost:8080/generic-stream', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'text/plain'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`请求失败：${response.status} ${response.statusText}`);
+                }
+
+                // 获取响应体的可读流
+                const reader = response.body.getReader();
+                streamReader = reader;
+                const decoder = new TextDecoder('utf-8'); // 解码二进制数据
+
+                // 循环读取分块数据
+                async function readChunk() {
+                    if (!isStreaming) return;
+
+                    const { done, value } = await reader.read();
+                    
+                    // 流结束
+                    if (done) {
+                        log('流式连接正常结束', 'end');
+                        resetStreamState();
+                        return;
+                    }
+
+                    // 解码二进制数据为文本（处理分块拼接）
+                    const chunk = decoder.decode(value, { stream: true });
+                    // 按行分割（处理多帧数据在同一个 chunk 的情况）
+                    const lines = chunk.split('\n').filter(line => line.trim() !== '');
+                    lines.forEach(line => log(line));
+
+                    // 继续读取下一个块
+                    readChunk();
+                }
+
+                // 开始读取
+                readChunk();
+
+            } catch (err) {
+                log(`流式接收异常：${err.message}`, 'error');
+                resetStreamState();
+            }
+        }
+
+        // 停止流式接收
+        function stopStream() {
+            if (streamReader) {
+                streamReader.cancel('用户主动停止'); // 取消读取器
+                streamReader = null;
+            }
+            log('用户主动停止流式接收', 'data');
+            resetStreamState();
+        }
+
+        // 重置流状态
+        function resetStreamState() {
+            isStreaming = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            streamReader = null;
+        }
+
+        // 页面关闭时清理流
+        window.addEventListener('beforeunload', () => {
+            if (isStreaming) stopStream();
+        });
+    </script>
+</body>
+</html>
